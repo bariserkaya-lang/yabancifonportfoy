@@ -10,7 +10,6 @@ st.markdown("# 📊 SEC Fon Analiz Sistemi")
 @st.cache_data
 def load_data():
     part_files = sorted(glob.glob("holding_part_*.tsv"))
-    
     if not part_files:
         st.error("Holding parçaları bulunamadı!")
         return None, None
@@ -22,58 +21,73 @@ def load_data():
     holdings = pd.concat(df_list, ignore_index=True)
     funds = pd.read_csv("info.tsv", delimiter='\t', low_memory=False)
     
+    if 'ISSUER_LEI' in holdings.columns:
+        lei_map = {}
+        for idx, row in holdings[holdings['ISSUER_LEI'].notna() & (holdings['ISSUER_LEI'] != '')].iterrows():
+            if row['ISSUER_NAME'] not in lei_map:
+                lei_map[row['ISSUER_NAME']] = row['ISSUER_LEI']
+        
+        def get_key(row):
+            lei = row.get('ISSUER_LEI')
+            name = row['ISSUER_NAME']
+            if pd.notna(lei) and str(lei) != '' and str(lei) != 'nan':
+                return lei
+            if name in lei_map:
+                return lei_map[name]
+            return name
+        
+        holdings['GROUP_KEY'] = holdings.apply(get_key, axis=1)
+        name_map = {}
+        for key, group in holdings.groupby('GROUP_KEY'):
+            name_map[key] = group['ISSUER_NAME'].value_counts().index[0]
+        holdings['DISPLAY_NAME'] = holdings['GROUP_KEY'].map(name_map)
+    else:
+        holdings['DISPLAY_NAME'] = holdings['ISSUER_NAME']
+    
+    for col in ['BALANCE', 'CURRENCY_VALUE', 'PERCENTAGE']:
+        if col in holdings.columns:
+            holdings[col] = pd.to_numeric(holdings[col], errors='coerce').fillna(0)
+    
     return holdings, funds
 
-# Sidebar
 st.sidebar.markdown("# SEC Analiz")
-menu = st.sidebar.radio(
-    "Menü",
-    ["📊 Dashboard", "🏢 Fonlar", "📈 Hisseler"],
-    label_visibility="collapsed"
-)
+menu = st.sidebar.radio("Navigation", ["📊 Dashboard", "🏢 Fonlar", "📈 Hisseler"], label_visibility="collapsed")
 
-# Verileri yükle
 if 'holdings' not in st.session_state:
     with st.spinner("Veriler yükleniyor..."):
         holdings, funds = load_data()
-        
-        for col in ['BALANCE', 'CURRENCY_VALUE', 'PERCENTAGE']:
-            if col in holdings.columns:
-                holdings[col] = pd.to_numeric(holdings[col], errors='coerce').fillna(0)
-        
+        if holdings is None:
+            st.stop()
         st.session_state['holdings'] = holdings
         st.session_state['funds'] = funds
-        st.sidebar.success(f"✅ {len(funds)} fon, {len(holdings):,} holding")
+        st.session_state['name_col'] = 'SERIES_NAME' if 'SERIES_NAME' in funds.columns else funds.columns[1]
+        st.sidebar.success(f"✅ {len(funds):,} fon, {len(holdings):,} holding")
 
 holdings = st.session_state['holdings']
 funds = st.session_state['funds']
-
-name_col = 'SERIES_NAME' if 'SERIES_NAME' in funds.columns else funds.columns[1]
+name_col = st.session_state['name_col']
 
 def fmt_currency(x):
-    if x >= 1e9:
-        return f"${x/1e9:.2f}B"
-    elif x >= 1e6:
-        return f"${x/1e6:.2f}M"
-    return f"${x:,.0f}"
+    return f"${x:,.2f}"
 
-# Dashboard
+def fmt_number(x):
+    return f"{x:,.0f}"
+
 if menu == "📊 Dashboard":
     st.markdown("## 📊 Dashboard")
     
-    hisse_istatistik = holdings.groupby('ISSUER_NAME').agg({
+    hisse_istatistik = holdings.groupby('DISPLAY_NAME').agg({
         'ACCESSION_NUMBER': 'nunique',
         'CURRENCY_VALUE': 'sum'
     }).reset_index()
     hisse_istatistik.columns = ['Hisse', 'Fon Sayısı', 'Toplam Piyasa Değeri']
     hisse_istatistik = hisse_istatistik.sort_values('Fon Sayısı', ascending=False).head(20)
-
-# Formatlama
-hisse_istatistik['Fon Sayısı'] = hisse_istatistik['Fon Sayısı'].apply(lambda x: f"{int(x):,}")
-hisse_istatistik['Toplam Piyasa Değeri'] = hisse_istatistik['Toplam Piyasa Değeri'].apply(lambda x: f"${x:,.2f}")
-
-st.subheader("🏆 Fonlar Tarafından En Çok Tercih Edilen Hisseler")
-st.dataframe(hisse_istatistik, use_container_width=True)
+    
+    hisse_istatistik['Fon Sayısı'] = hisse_istatistik['Fon Sayısı'].apply(fmt_number)
+    hisse_istatistik['Toplam Piyasa Değeri'] = hisse_istatistik['Toplam Piyasa Değeri'].apply(fmt_currency)
+    
+    st.subheader("🏆 Fonlar Tarafından En Çok Tercih Edilen Hisseler")
+    st.dataframe(hisse_istatistik, use_container_width=True)
     
     col1, col2 = st.columns(2)
     with col1:
@@ -85,13 +99,12 @@ st.dataframe(hisse_istatistik, use_container_width=True)
         fig2.update_layout(xaxis_tickangle=-45, height=400)
         st.plotly_chart(fig2, use_container_width=True)
 
-# Fonlar
 elif menu == "🏢 Fonlar":
     st.markdown("## 🏢 Fonlar")
     
     fon_portfoy = holdings.groupby('ACCESSION_NUMBER').agg({
         'CURRENCY_VALUE': 'sum',
-        'ISSUER_NAME': 'count'
+        'DISPLAY_NAME': 'count'
     }).reset_index()
     fon_portfoy.columns = ['ACCESSION_NUMBER', 'Toplam Değer', 'Hisse Sayısı']
     fon_portfoy = fon_portfoy.merge(funds[['ACCESSION_NUMBER', name_col]], on='ACCESSION_NUMBER')
@@ -104,23 +117,15 @@ elif menu == "🏢 Fonlar":
         fon_portfoy = fon_portfoy[fon_portfoy[name_col].str.contains(arama, case=False, na=False)]
     
     for i, row in fon_portfoy.head(50).iterrows():
-        col1, col2, col3 = st.columns([3, 1.5, 1])
-        with col1:
-            st.write(row[name_col][:60])
-        with col2:
-            st.write(fmt_currency(row['Toplam Değer']))
-        with col3:
-            st.write(f"{int(row['Hisse Sayısı']):,}")
-        st.divider()
+        st.write(f"**{row[name_col][:60]}** | {fmt_currency(row['Toplam Değer'])} | {fmt_number(row['Hisse Sayısı'])} hisse")
 
-# Hisseler
 elif menu == "📈 Hisseler":
     st.markdown("## 📈 Hisseler")
     
-    tum_hisseler = sorted(holdings['ISSUER_NAME'].dropna().unique())
-    st.info(f"📊 Toplam {len(tum_hisseler):,} farklı hisse")
+    tum_hisseler = sorted(holdings['DISPLAY_NAME'].dropna().unique())
+    st.info(f"📊 Toplam {len(tum_hisseler):,} farklı şirket (LEI bazında birleştirildi)")
     
-    hisse_arama = st.text_input("🔍 Hisse ara")
+    hisse_arama = st.text_input("🔍 Hisse ara (örn: NVIDIA, Apple, Microsoft)")
     if hisse_arama:
         tum_hisseler = [h for h in tum_hisseler if hisse_arama.upper() in h.upper()]
     
@@ -128,7 +133,7 @@ elif menu == "📈 Hisseler":
         secilen_hisse = st.selectbox("Bir hisse seçin", tum_hisseler)
         
         if secilen_hisse:
-            hisse_fonlar = holdings[holdings['ISSUER_NAME'] == secilen_hisse].merge(
+            hisse_fonlar = holdings[holdings['DISPLAY_NAME'] == secilen_hisse].merge(
                 funds[['ACCESSION_NUMBER', name_col]], on='ACCESSION_NUMBER'
             )
             hisse_fonlar = hisse_fonlar.groupby(name_col).agg({
@@ -137,11 +142,13 @@ elif menu == "📈 Hisseler":
             }).reset_index()
             hisse_fonlar = hisse_fonlar.sort_values('BALANCE', ascending=False)
             
-            st.success(f"✅ {secilen_hisse} hissesini tutan {len(hisse_fonlar):,} fon")
+            st.success(f"✅ **{secilen_hisse}** şirketini tutan **{len(hisse_fonlar):,}** fon")
             
             if not hisse_fonlar.empty:
-                fig = px.bar(hisse_fonlar.head(10), x=name_col, y='BALANCE', title="En Çok Pozisyona Sahip Fonlar")
-                fig.update_layout(xaxis_tickangle=-45, height=400)
+                fig = px.bar(hisse_fonlar.head(10), x=name_col, y='BALANCE', title="En Çok Pozisyona Sahip 10 Fon")
+                fig.update_layout(xaxis_tickangle=-45, height=450)
                 st.plotly_chart(fig, use_container_width=True)
                 
+                hisse_fonlar['BALANCE'] = hisse_fonlar['BALANCE'].apply(fmt_number)
+                hisse_fonlar['CURRENCY_VALUE'] = hisse_fonlar['CURRENCY_VALUE'].apply(fmt_currency)
                 st.dataframe(hisse_fonlar, use_container_width=True)
