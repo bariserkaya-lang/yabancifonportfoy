@@ -92,7 +92,7 @@ elif menu == "🏢 Fonlar":
     for i, row in fon_portfoy.head(50).iterrows():
         col1, col2, col3 = st.columns([3, 1.5, 1])
         with col1:
-            st.write(row[name_col][:60])
+            st.write(str(row[name_col])[:60] if pd.notna(row[name_col]) else "Bilinmeyen Fon")
         with col2:
             st.write(fmt_currency(row['Toplam Değer']))
         with col3:
