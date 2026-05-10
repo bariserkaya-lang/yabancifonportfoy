@@ -69,7 +69,7 @@ if menu == "📊 Dashboard":
     hisse_istatistik = hisse_istatistik.sort_values('Fon Sayısı', ascending=False).head(20)
     
     st.subheader("🏆 Fonlar Tarafından En Çok Tercih Edilen Hisseler")
-    st.dataframe(hisse_istatistik, use_container_width=True)
+    st.dataframe(hisse_istatistik.style.format({'Fon Sayısı': '{:,}', 'Toplam Piyasa Değeri': '${:,.2f}'}), use_container_width=True)
     
     col1, col2 = st.columns(2)
     with col1:
