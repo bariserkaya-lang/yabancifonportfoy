@@ -67,9 +67,13 @@ if menu == "📊 Dashboard":
     }).reset_index()
     hisse_istatistik.columns = ['Hisse', 'Fon Sayısı', 'Toplam Piyasa Değeri']
     hisse_istatistik = hisse_istatistik.sort_values('Fon Sayısı', ascending=False).head(20)
-    
-    st.subheader("🏆 Fonlar Tarafından En Çok Tercih Edilen Hisseler")
-    st.dataframe(hisse_istatistik, use_container_width=True)
+
+# Formatlama
+hisse_istatistik['Fon Sayısı'] = hisse_istatistik['Fon Sayısı'].apply(lambda x: f"{int(x):,}")
+hisse_istatistik['Toplam Piyasa Değeri'] = hisse_istatistik['Toplam Piyasa Değeri'].apply(lambda x: f"${x:,.2f}")
+
+st.subheader("🏆 Fonlar Tarafından En Çok Tercih Edilen Hisseler")
+st.dataframe(hisse_istatistik, use_container_width=True)
     
     col1, col2 = st.columns(2)
     with col1:
